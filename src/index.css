@@ -1,7 +1,63 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-@import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局样式重置和基础配置 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* 防止滚动条出现时页面压缩 - 关键修复 */
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+body {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+code, pre {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* 自定义滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* 确保容器宽度稳定，滚动条不影响布局 */
+.fixed-width-container {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+/* 确保聊天消息列表布局稳定 */
+.message-list {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }

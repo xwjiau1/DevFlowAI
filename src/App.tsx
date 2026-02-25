@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Plus, 
-  MessageSquare, 
-  Layout, 
-  FileText, 
-  CheckSquare, 
-  ChevronRight, 
-  Send, 
-  Bot, 
-  User, 
+import {
+  Plus,
+  MessageSquare,
+  Layout,
+  FileText,
+  CheckSquare,
+  ChevronRight,
+  Send,
+  Bot,
+  User,
   Folder as FolderIcon,
   Settings,
   History,
@@ -37,8 +37,11 @@ import {
   Maximize2,
   Copy,
   Check,
-  Download
+  Download,
+  Sun,
+  Moon
 } from 'lucide-react';
+import { useTheme } from './context/ThemeContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   BarChart, 
@@ -91,7 +94,74 @@ const DocPreview = ({ doc }: { doc: Document }) => {
   const isText = doc.type.startsWith('text/') || doc.type.includes('json') || doc.title.endsWith('.md');
 
   if (isImage) {
-    return <img src={doc.content} alt={doc.title} className="max-w-full h-auto rounded-xl mx-auto" />;
+    // 确保图片URL有效，防止无效的base64导致显示问题
+    let imageUrl = doc.content || '';
+    
+    // 调试信息，帮助分析问题
+    console.log('Image preview attempt:', {
+      docId: doc.id,
+      title: doc.title,
+      type: doc.type,
+      contentLength: imageUrl.length,
+      startsWithData: imageUrl.startsWith('data:'),
+      // 只显示前100个字符和后100个字符，避免日志过长
+      contentPreview: imageUrl ? `${imageUrl.substring(0, 100)}...${imageUrl.substring(imageUrl.length - 100)}` : ''
+    });
+    
+    // 确保base64 URL格式正确
+    if (imageUrl && !imageUrl.startsWith('data:')) {
+      console.error('Invalid image URL format:', imageUrl);
+      imageUrl = '';
+    }
+    
+    // 检查base64 URL是否完整
+    if (imageUrl && imageUrl.startsWith('data:')) {
+      // 检查data URL格式是否完整（包含mimeType和base64数据）
+      const dataUrlRegex = /^data:([^;]+);base64,([A-Za-z0-9+/]+=*)$/;
+      const match = imageUrl.match(dataUrlRegex);
+      if (!match) {
+        console.error('Malformed data URL:', imageUrl);
+        // 尝试修复base64 URL（如果只是缺少base64前缀）
+        const simpleMatch = imageUrl.match(/^data:([^;]+);(.*)$/);
+        if (simpleMatch) {
+          console.log('Trying to fix malformed data URL');
+          imageUrl = `data:${simpleMatch[1]};base64,${simpleMatch[2]}`;
+        } else {
+          imageUrl = '';
+        }
+      }
+    }
+    
+    return (
+      <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm flex items-center justify-center">
+        {imageUrl ? (
+          <img 
+            src={imageUrl} 
+            alt={doc.title} 
+            className="max-w-full max-h-[600px] object-contain rounded-xl" 
+            crossOrigin="anonymous" // 添加跨域支持
+            onError={(e) => {
+              console.error('Image load error:', {
+                event: e,
+                src: e.currentTarget.src.substring(0, 100) + '...', // 只显示部分URL
+                srcLength: e.currentTarget.src.length,
+                docId: doc.id
+              });
+              e.currentTarget.style.display = 'none';
+              const parent = e.currentTarget.parentElement;
+              if (parent) {
+                parent.innerHTML = `<p className="text-zinc-500">Image failed to load: ${doc.title}</p>`;
+              }
+            }}
+          />
+        ) : (
+          <div className="text-center p-8">
+            <p className="text-zinc-500">Invalid image data</p>
+            <p className="text-xs text-zinc-400 mt-2">Image URL is missing or invalid</p>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (isVideo) {
@@ -192,6 +262,8 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // 主题管理
+  const { theme, setTheme } = useTheme();
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isAddingModel, setIsAddingModel] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
@@ -219,13 +291,47 @@ export default function App() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const [uploadingStep, setUploadingStep] = useState<number | null>(null);
 
   useEffect(() => {
     checkBackend();
     fetchProjects();
     fetchModels();
+  }, []);
+
+  // 优化的自动滚动逻辑 - 添加防抖机制减少滚动频率
+  useEffect(() => {
+    // 仅在聊天选项卡下执行自动滚动
+    if (activeTab === 'chat') {
+      // 使用防抖机制，延迟滚动，减少流式输出时的滚动频率
+      const scrollTimer = setTimeout(() => {
+        // 使用requestAnimationFrame确保DOM更新后再滚动
+        requestAnimationFrame(() => {
+          if (messagesEndRef.current) {
+            // 使用直接滚动而非平滑滚动，避免连续滚动导致的抖动
+            messagesEndRef.current.scrollIntoView({
+              behavior: 'instant', // 直接滚动，减少抖动
+              block: 'end',
+              inline: 'nearest'
+            });
+          }
+        });
+      }, 100); // 100ms防抖，平衡实时性和稳定性
+
+      // 清理定时器
+      return () => clearTimeout(scrollTimer);
+    }
+  }, [messages, activeTab]);
+
+  // 确保聊天容器高度稳定，避免流式输出时的布局抖动
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.style.minHeight = 'calc(100vh - 200px)';
+      chatContainerRef.current.style.display = 'flex';
+      chatContainerRef.current.style.flexDirection = 'column';
+    }
   }, []);
 
   const checkBackend = async () => {
@@ -254,9 +360,7 @@ export default function App() {
     }
   }, [activeProject, activeTab]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  // 删除重复的滚动逻辑，保留防抖优化的滚动（第304行开始）
 
   const fetchModels = async () => {
     try {
@@ -472,9 +576,11 @@ export default function App() {
       setUploadingStep(null);
     };
 
+    // 根据文件类型选择读取方式
     if (file.type.startsWith('text/') || file.type === 'application/json' || file.name.endsWith('.md')) {
       reader.readAsText(file);
     } else {
+      // 对于图片等二进制文件，使用readAsDataURL转换为base64格式
       reader.readAsDataURL(file);
     }
   };
@@ -803,7 +909,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#F9F9F8] text-zinc-900 font-sans overflow-hidden">
+    <div className="flex h-screen bg-[#F9F9F8] dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans overflow-hidden">
       {/* Hidden File Input */}
       <input 
         type="file" 
@@ -817,35 +923,35 @@ export default function App() {
         {isCreatingProject && (
           <div key="modal-create-project" className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="bg-white dark:bg-zinc-900 rounded-xl p-6 w-full max-w-md shadow-lg"
             >
-              <h2 className="text-2xl font-bold mb-6">Create New Project</h2>
+              <h2 className="text-xl font-bold mb-4">Create New Project</h2>
               <form onSubmit={createProject} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-1">Project Name</label>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Project Name</label>
                   <input 
                     autoFocus
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full bg-zinc-100 border-none rounded-xl py-3 px-4 focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg py-3 px-4 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-zinc-900 dark:text-zinc-100 transition-all"
                     placeholder="Enter project name..."
                   />
                 </div>
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
                     onClick={() => setIsCreatingProject(false)}
-                    className="flex-1 py-3 bg-zinc-100 text-zinc-600 rounded-xl font-semibold hover:bg-zinc-200 transition-all"
+                    className="flex-1 py-3 bg-zinc-50 text-zinc-600 border border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700 rounded-lg font-medium hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-all"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
                     disabled={!newProjectName.trim()}
-                    className="flex-1 py-3 bg-zinc-900 text-white rounded-xl font-semibold hover:bg-zinc-800 disabled:opacity-50 transition-all"
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:hover:bg-emerald-600 transition-all"
                   >
                     Create Project
                   </button>
@@ -858,35 +964,35 @@ export default function App() {
         {isReviewModalOpen && (
           <div key="modal-daily-review" className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="bg-white dark:bg-zinc-900 rounded-xl p-6 w-full max-w-md shadow-lg"
             >
-              <h2 className="text-2xl font-bold mb-6">Daily Review</h2>
+              <h2 className="text-xl font-bold mb-4">Daily Review</h2>
               <form onSubmit={handleCreateReview} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-1">Content</label>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Content</label>
                   <textarea 
                     autoFocus
                     value={newReviewContent}
                     onChange={(e) => setNewReviewContent(e.target.value)}
-                    className="w-full bg-zinc-100 border-none rounded-xl py-3 px-4 focus:ring-2 focus:ring-emerald-500 outline-none min-h-[120px] resize-none"
+                    className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg py-3 px-4 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none min-h-[120px] resize-none text-zinc-900 dark:text-zinc-100"
                     placeholder="What happened today? Any blockers?"
                   />
                 </div>
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
                     onClick={() => setIsReviewModalOpen(false)}
-                    className="flex-1 py-3 bg-zinc-100 text-zinc-600 rounded-xl font-semibold hover:bg-zinc-200 transition-all"
+                    className="flex-1 py-3 bg-zinc-50 text-zinc-600 border border-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700 rounded-lg font-medium hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-all"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
                     disabled={!newReviewContent.trim()}
-                    className="flex-1 py-3 bg-zinc-900 text-white rounded-xl font-semibold hover:bg-zinc-800 disabled:opacity-50 transition-all"
+                    className="flex-1 py-3 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 disabled:opacity-50 disabled:hover:bg-emerald-600 transition-all"
                   >
                     Save Review
                   </button>
@@ -902,7 +1008,7 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl p-8 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
+              className="bg-white dark:bg-zinc-900 rounded-3xl p-8 w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
             >
               <div className="flex items-center justify-between mb-8 sticky top-0 bg-white pb-4 z-10">
                 <h2 className="text-2xl font-bold">Settings</h2>
@@ -1222,13 +1328,13 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 relative">
         {/* Header */}
-        <header className="h-16 border-b border-zinc-200 bg-white/80 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-10">
+        <header className="h-16 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-10">
           <div className="flex items-center gap-4">
             <button 
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
+              className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
             >
-              <Layout className="w-5 h-5 text-zinc-500" />
+              <Layout className="w-5 h-5 text-zinc-500 dark:text-zinc-400" />
             </button>
             <div className="flex flex-col">
               <h1 className="font-semibold text-lg leading-tight">{activeProject?.name || 'Select a Project'}</h1>
@@ -1281,7 +1387,23 @@ export default function App() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
+            {/* 主题切换按钮 */}
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors relative"
+                title="Toggle Theme"
+              >
+                <div className="flex items-center justify-center">
+                  {theme === 'dark' ? (
+                    <Moon className="w-5 h-5 text-zinc-500 dark:text-zinc-300" />
+                  ) : (
+                    <Sun className="w-5 h-5 text-zinc-500 dark:text-zinc-300" />
+                  )}
+                </div>
+              </button>
+            </div>
             <div className="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center overflow-hidden">
               <User className="w-5 h-5 text-zinc-500" />
             </div>
@@ -1298,28 +1420,37 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 className="h-full flex flex-col"
+                ref={chatContainerRef}
               >
-                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div 
+                  className="flex-1 overflow-y-auto p-6 space-y-6 message-list bg-[#F9F9F8] dark:bg-zinc-900"
+                  style={{
+                    scrollBehavior: 'auto', // 禁用平滑滚动，减少抖动
+                    overflowX: 'hidden', // 禁用水平滚动
+                    width: '100%', // 固定宽度
+                    maxWidth: '100%' // 确保不超过容器宽度
+                  }}
+                >
                   {messages.length === 0 && (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4 max-w-md mx-auto">
-                      <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center">
+                      <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-2xl flex items-center justify-center">
                         <Bot className="w-10 h-10" />
                       </div>
-                      <h2 className="text-xl font-bold">Welcome to {activeProject?.name}</h2>
-                      <p className="text-zinc-500">
+                      <h2 className="text-xl font-bold text-zinc-900 dark:text-white">Welcome to {activeProject?.name}</h2>
+                      <p className="text-zinc-500 dark:text-zinc-400">
                         I'm your AI Development Assistant. I can help you with requirement analysis, 
                         drawing flowcharts, and managing your development lifecycle.
                       </p>
                       <div className="grid grid-cols-2 gap-2 w-full">
                         <button 
                           onClick={() => setInput("帮我整理一下这个项目的需求确认纪要")}
-                          className="p-3 text-sm bg-white border border-zinc-200 rounded-xl hover:border-emerald-500 transition-colors text-left"
+                          className="p-3 text-sm bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl hover:border-emerald-500 transition-colors text-left text-zinc-900 dark:text-white"
                         >
                           整理需求纪要
                         </button>
                         <button 
                           onClick={() => setInput("为这个项目画一个整体流程图")}
-                          className="p-3 text-sm bg-white border border-zinc-200 rounded-xl hover:border-emerald-500 transition-colors text-left"
+                          className="p-3 text-sm bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl hover:border-emerald-500 transition-colors text-left text-zinc-900 dark:text-white"
                         >
                           绘制流程图
                         </button>
@@ -1328,20 +1459,22 @@ export default function App() {
                   )}
                   {messages.map((m) => (
                     <div key={m.id} className={cn(
-                      "flex gap-4 max-w-4xl mx-auto",
+                      "flex gap-3 max-w-4xl mx-auto",
                       m.role === 'user' ? "flex-row-reverse" : "flex-row"
                     )}>
                       <div className={cn(
-                        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
-                        m.role === 'user' ? "bg-zinc-900 text-white" : "bg-emerald-500 text-zinc-900"
+                        "w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all",
+                        m.role === 'user' 
+                          ? "bg-zinc-800 text-white hover:bg-zinc-700" 
+                          : "bg-emerald-500 text-white hover:bg-emerald-600"
                       )}>
                         {m.role === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                       </div>
                       <div className={cn(
-                        "p-4 rounded-2xl shadow-sm border relative group/msg",
+                        "p-5 rounded-xl shadow-md border relative group/msg max-w-[calc(100%-48px)]",
                         m.role === 'user' 
-                          ? "bg-zinc-900 text-white border-zinc-800" 
-                          : "bg-white border-zinc-200 text-zinc-800"
+                          ? "bg-zinc-800 text-white border-zinc-700" 
+                          : "bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-white"
                       )}>
                         <MarkdownRenderer 
                           content={m.content} 
@@ -1357,10 +1490,10 @@ export default function App() {
                         <button 
                           onClick={() => handleCopyMessage(m.id, m.content)}
                           className={cn(
-                            "absolute top-2 right-2 p-1.5 rounded-lg transition-all opacity-0 group-hover/msg:opacity-100",
+                            "absolute top-3 right-3 p-1.5 rounded-lg transition-all opacity-0 group-hover/msg:opacity-100 hover:scale-105",
                             m.role === 'user' 
-                              ? "bg-zinc-800 text-zinc-400 hover:text-white" 
-                              : "bg-zinc-50 text-zinc-400 hover:text-zinc-600 border border-zinc-200"
+                              ? "bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white" 
+                              : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
                           )}
                           title="Copy message"
                         >
@@ -1368,7 +1501,7 @@ export default function App() {
                         </button>
 
                         {m.role === 'assistant' && (m.prompt_tokens !== undefined || m.completion_tokens !== undefined) && (
-                          <div className="mt-3 pt-3 border-t border-zinc-100 flex items-center gap-4 text-[10px] text-zinc-400 font-mono uppercase tracking-wider">
+                          <div className="mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700 flex items-center gap-4 text-[10px] text-zinc-500 dark:text-zinc-400 font-mono">
                             <div className="flex items-center gap-1">
                               <Database className="w-3 h-3" />
                               Prompt: {m.prompt_tokens || 0}
@@ -1377,7 +1510,7 @@ export default function App() {
                               <Zap className="w-3 h-3" />
                               Completion: {m.completion_tokens || 0}
                             </div>
-                            <div className="flex items-center gap-1 font-bold text-zinc-500">
+                            <div className="flex items-center gap-1 font-medium text-zinc-600 dark:text-zinc-300">
                               Total: {(m.prompt_tokens || 0) + (m.completion_tokens || 0)}
                             </div>
                           </div>
@@ -1386,15 +1519,15 @@ export default function App() {
                     </div>
                   ))}
                   {isLoading && (
-                    <div className="flex gap-4 max-w-4xl mx-auto">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-500 text-zinc-900 flex items-center justify-center shrink-0">
+                    <div className="flex gap-3 max-w-4xl mx-auto">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
                         <Bot className="w-5 h-5" />
                       </div>
-                      <div className="p-4 rounded-2xl bg-white border border-zinc-200 shadow-sm">
-                        <div className="flex gap-1">
-                          <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <div className="p-5 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-md">
+                        <div className="flex gap-2">
+                          <span className="w-2 h-2 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-2 h-2 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-2 h-2 bg-zinc-400 dark:bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                         </div>
                       </div>
                     </div>
@@ -1402,27 +1535,42 @@ export default function App() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                <div className="p-6 bg-white border-t border-zinc-200">
+                <div className="p-4 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800">
                   <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto relative">
-                    <input
-                      ref={chatInputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Ask anything about the project..."
-                      className="w-full bg-zinc-100 border-none rounded-2xl py-4 pl-6 pr-14 focus:ring-2 focus:ring-emerald-500 transition-all outline-none"
-                      autoFocus
-                    />
-                    <button 
-                      type="submit"
-                      disabled={!input.trim() || isLoading}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-zinc-900 text-white rounded-xl hover:bg-zinc-800 disabled:opacity-50 disabled:hover:bg-zinc-900 transition-all"
-                    >
-                      <Send className="w-5 h-5" />
-                    </button>
+                    <div className="relative flex items-center">
+                      <textarea
+                        ref={chatInputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        placeholder="Ask anything about the project..."
+                        className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-full py-3 pl-6 pr-16 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 shadow-sm"
+                        autoFocus
+                        rows={1}
+                        style={{
+                          // 固定宽度，避免输入时的布局重排
+                          boxSizing: 'border-box',
+                          width: '100%',
+                          minWidth: '100%',
+                          maxWidth: '100%',
+                          // 防止文本溢出导致水平滚动
+                          wordWrap: 'break-word',
+                          overflowWrap: 'break-word',
+                          // 确保输入时不会触发布局重排
+                          overflowX: 'hidden'
+                        }}
+                      />
+                      <button 
+                        type="submit"
+                        disabled={!input.trim() || isLoading}
+                        className="absolute right-2 bottom-2 p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-700 disabled:opacity-50 disabled:hover:bg-emerald-600 transition-all hover:scale-105 flex items-center justify-center w-10 h-10"
+                      >
+                        <Send className="w-5 h-5" />
+                      </button>
+                    </div>
                   </form>
-                  <p className="text-center text-[10px] text-zinc-400 mt-3 uppercase tracking-widest font-semibold">
+                  {/* <p className="text-center text-xs text-zinc-500 dark:text-zinc-400 mt-3 font-medium">
                     Powered by Gemini 3.1 Pro
-                  </p>
+                  </p> */}
                 </div>
               </motion.div>
             )}
@@ -1438,10 +1586,10 @@ export default function App() {
                 <div className="max-w-5xl mx-auto space-y-8">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h2 className="text-2xl font-bold">Project Lifecycle</h2>
-                      <p className="text-zinc-500">Track your progress through the 7-step development standard.</p>
+                      <h2 className="text-2xl font-bold text-zinc-900 dark:text-white">Project Lifecycle</h2>
+                      <p className="text-zinc-500 dark:text-zinc-300">Track your progress through the 7-step development standard.</p>
                     </div>
-                    <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2 rounded-full text-sm font-semibold">
+                    <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 px-4 py-2 rounded-full text-sm font-semibold">
                       <CheckSquare className="w-4 h-4" />
                       {tasks.filter(t => t.status === 'done').length} / {STEPS.length} Steps Completed
                     </div>
@@ -1460,10 +1608,10 @@ export default function App() {
                           className={cn(
                             "group p-6 rounded-3xl border transition-all relative overflow-hidden flex flex-col",
                             isDone 
-                              ? "bg-emerald-50 border-emerald-100" 
+                              ? "bg-emerald-50 dark:bg-emerald-900/30 border-emerald-100 dark:border-emerald-800" 
                               : isDoing 
-                                ? "bg-blue-50 border-blue-100"
-                                : "bg-white border-zinc-200 hover:border-zinc-300 hover:shadow-md"
+                                ? "bg-blue-50 dark:bg-blue-900/30 border-blue-100 dark:border-blue-800"
+                                : "bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600 hover:shadow-md"
                           )}
                         >
                           {isDone && (
@@ -1479,15 +1627,15 @@ export default function App() {
                           )}>
                             <step.icon className="w-6 h-6" />
                           </div>
-                          <h3 className="font-bold text-lg mb-1">{step.id}. {step.title}</h3>
-                          <p className="text-sm text-zinc-500 mb-4 flex-1">{step.description}</p>
+                          <h3 className="font-bold text-lg mb-1 text-zinc-900 dark:text-white">{step.id}. {step.title}</h3>
+                          <p className="text-sm text-zinc-500 dark:text-zinc-300 mb-4 flex-1">{step.description}</p>
                           
                           {stepDocs.length > 0 && (
                             <div className="mb-4 space-y-1">
-                              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Documents</p>
+                              <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">Documents</p>
                               {stepDocs.map(doc => (
-                                <div key={doc.id} className="flex items-center gap-2 text-xs text-zinc-600 bg-white/50 p-1.5 rounded-lg border border-zinc-100">
-                                  <FileText className="w-3 h-3 text-zinc-400" />
+                                <div key={doc.id} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-700 p-1.5 rounded-lg border border-zinc-100 dark:border-zinc-600">
+                                  <FileText className="w-3 h-3 text-zinc-400 dark:text-zinc-500" />
                                   <span className="truncate">{doc.title}</span>
                                 </div>
                               ))}
@@ -1500,7 +1648,7 @@ export default function App() {
                               className={cn(
                                 "flex-1 py-2 rounded-xl text-sm font-semibold transition-all",
                                 isDone 
-                                  ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" 
+                                  ? "bg-emerald-100 dark:bg-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-700" 
                                   : isDoing
                                     ? "bg-blue-600 text-white hover:bg-blue-700"
                                     : "bg-zinc-900 text-white hover:bg-zinc-800"
@@ -1513,7 +1661,7 @@ export default function App() {
                                 setUploadingStep(step.id);
                                 fileInputRef.current?.click();
                               }}
-                              className="p-2 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200 transition-all"
+                              className="p-2 bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 rounded-xl hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-all"
                               title="Upload Document"
                             >
                               <Plus className="w-5 h-5" />
@@ -1737,48 +1885,48 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                    <div className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-800 p-6 rounded-3xl border border-zinc-200 dark:border-zinc-700 shadow-sm">
                       <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+                        <div className="w-10 h-10 bg-blue-50 dark:bg-blue-900/30 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-400">
                           <Activity className="w-5 h-5" />
                         </div>
-                        <span className="text-sm font-medium text-zinc-500">Total Tokens</span>
+                        <span className="text-sm font-medium text-zinc-500 dark:text-zinc-300">Total Tokens</span>
                       </div>
-                      <div className="text-3xl font-bold">
+                      <div className="text-3xl font-bold text-zinc-900 dark:text-white">
                         {(messages.reduce((acc, m) => acc + (m.prompt_tokens || 0) + (m.completion_tokens || 0), 0)).toLocaleString()}
                       </div>
-                      <div className="text-xs text-zinc-400 mt-1">Across {messages.length} messages</div>
+                      <div className="text-xs text-zinc-400 dark:text-zinc-400 mt-1">Across {messages.length} messages</div>
                     </div>
                     
-                    <div className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-800 p-6 rounded-3xl border border-zinc-200 dark:border-zinc-700 shadow-sm">
                       <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
+                        <div className="w-10 h-10 bg-emerald-50 dark:bg-emerald-900/30 rounded-xl flex items-center justify-center text-emerald-600 dark:text-emerald-400">
                           <Database className="w-5 h-5" />
                         </div>
-                        <span className="text-sm font-medium text-zinc-500">Prompt Tokens</span>
+                        <span className="text-sm font-medium text-zinc-500 dark:text-zinc-300">Prompt Tokens</span>
                       </div>
-                      <div className="text-3xl font-bold">
+                      <div className="text-3xl font-bold text-zinc-900 dark:text-white">
                         {(messages.reduce((acc, m) => acc + (m.prompt_tokens || 0), 0)).toLocaleString()}
                       </div>
-                      <div className="text-xs text-zinc-400 mt-1">Input context usage</div>
+                      <div className="text-xs text-zinc-400 dark:text-zinc-400 mt-1">Input context usage</div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-800 p-6 rounded-3xl border border-zinc-200 dark:border-zinc-700 shadow-sm">
                       <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600">
+                        <div className="w-10 h-10 bg-purple-50 dark:bg-purple-900/30 rounded-xl flex items-center justify-center text-purple-600 dark:text-purple-400">
                           <Zap className="w-5 h-5" />
                         </div>
-                        <span className="text-sm font-medium text-zinc-500">Completion Tokens</span>
+                        <span className="text-sm font-medium text-zinc-500 dark:text-zinc-300">Completion Tokens</span>
                       </div>
-                      <div className="text-3xl font-bold">
+                      <div className="text-3xl font-bold text-zinc-900 dark:text-white">
                         {(messages.reduce((acc, m) => acc + (m.completion_tokens || 0), 0)).toLocaleString()}
                       </div>
-                      <div className="text-xs text-zinc-400 mt-1">Model output usage</div>
+                      <div className="text-xs text-zinc-400 dark:text-zinc-400 mt-1">Model output usage</div>
                     </div>
                   </div>
 
-                  <div className="bg-white p-8 rounded-3xl border border-zinc-200 shadow-sm mb-8">
-                    <h3 className="text-lg font-bold mb-6">Token Usage Trend</h3>
+                  <div className="bg-white dark:bg-zinc-800 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-700 shadow-sm mb-8">
+                    <h3 className="text-lg font-bold mb-6 text-zinc-900 dark:text-white">Token Usage Trend</h3>
                     <div className="h-[300px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={messages.filter(m => m.role === 'assistant').map((m, i) => ({
@@ -1793,11 +1941,11 @@ export default function App() {
                               <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
                             </linearGradient>
                           </defs>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'dark' ? '#374151' : '#f4f4f5'} />
                           <XAxis dataKey="name" hide />
                           <YAxis hide />
                           <Tooltip 
-                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.3)' }}
                           />
                           <Area type="monotone" dataKey="total" stroke="#10b981" fillOpacity={1} fill="url(#colorTotal)" strokeWidth={2} />
                         </AreaChart>
@@ -1805,29 +1953,29 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden">
-                    <div className="p-6 border-b border-zinc-100 flex items-center justify-between">
-                      <h3 className="text-lg font-bold">Recent Logs</h3>
-                      <span className="text-xs text-zinc-400 font-mono">Last {Math.min(messages.length, 10)} interactions</span>
+                  <div className="bg-white dark:bg-zinc-800 rounded-3xl border border-zinc-200 dark:border-zinc-700 shadow-sm overflow-hidden">
+                    <div className="p-6 border-b border-zinc-100 dark:border-zinc-700 flex items-center justify-between">
+                      <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Recent Logs</h3>
+                      <span className="text-xs text-zinc-400 dark:text-zinc-500 font-mono">Last {Math.min(messages.length, 10)} interactions</span>
                     </div>
-                    <div className="divide-y divide-zinc-100">
+                    <div className="divide-y divide-zinc-100 dark:divide-zinc-700">
                       {messages.slice(-10).reverse().map(m => (
-                        <div key={m.id} className="p-4 flex items-center justify-between hover:bg-zinc-50 transition-colors">
+                        <div key={m.id} className="p-4 flex items-center justify-between hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors">
                           <div className="flex items-center gap-4">
                             <div className={cn(
                               "w-8 h-8 rounded-lg flex items-center justify-center",
-                              m.role === 'user' ? "bg-zinc-100 text-zinc-600" : "bg-emerald-50 text-emerald-600"
+                              m.role === 'user' ? "bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300" : "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400"
                             )}>
                               {m.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                             </div>
                             <div>
-                              <div className="text-sm font-medium truncate max-w-md">{m.content.substring(0, 100)}...</div>
-                              <div className="text-[10px] text-zinc-400 uppercase font-mono">{new Date(m.created_at).toLocaleString()}</div>
+                              <div className="text-sm font-medium truncate max-w-md text-zinc-900 dark:text-zinc-300">{m.content.substring(0, 100)}...</div>
+                              <div className="text-[10px] text-zinc-400 dark:text-zinc-500 uppercase font-mono">{new Date(m.created_at).toLocaleString()}</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-4 text-xs font-mono">
-                            <div className="text-zinc-500">P: <span className="text-zinc-900">{m.prompt_tokens || 0}</span></div>
-                            <div className="text-zinc-500">C: <span className="text-zinc-900">{m.completion_tokens || 0}</span></div>
+                            <div className="text-zinc-500 dark:text-zinc-400">P: <span className="text-zinc-900 dark:text-white">{m.prompt_tokens || 0}</span></div>
+                            <div className="text-zinc-500 dark:text-zinc-400">C: <span className="text-zinc-900 dark:text-white">{m.completion_tokens || 0}</span></div>
                           </div>
                         </div>
                       ))}

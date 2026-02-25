@@ -68,7 +68,6 @@ db.exec(`
   );
 `);
 
-db.exec("DROP TABLE IF EXISTS models");
 db.exec(`
   CREATE TABLE IF NOT EXISTS models (
     id TEXT PRIMARY KEY,

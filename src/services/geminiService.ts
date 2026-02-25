@@ -27,12 +27,17 @@ You can also help with "Daily Review" (LL: continuous review).
 
 Always maintain context of the current project.`;
 
+// 通用支持的MIME类型
 const SUPPORTED_INLINE_MIMES = [
-  'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif',
+  'image/png', 'image/jpeg', 'image/webp',
   'audio/wav', 'audio/mp3', 'audio/aiff', 'audio/aac', 'audio/ogg', 'audio/flac',
   'video/mp4', 'video/mpeg', 'video/mov', 'video/avi', 'video/x-flv', 'video/mpg', 'video/webm', 'video/wmv', 'video/3gpp',
   'application/pdf'
 ];
+
+// 大模型支持的图片格式
+const GEMINI_SUPPORTED_IMAGES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+const OPENAI_SUPPORTED_IMAGES = ['image/png', 'image/jpeg', 'image/webp'];
 
 export async function chatWithAI(
   projectId: string, 
@@ -86,13 +91,23 @@ export async function chatWithAI(
         const docParts: any[] = documents.map(doc => {
           if (doc.content.startsWith('data:')) {
             const match = doc.content.match(/^data:([^;]+);base64,(.*)$/);
-            if (match && SUPPORTED_INLINE_MIMES.includes(match[1])) {
-              return {
-                inlineData: {
-                  mimeType: match[1],
-                  data: match[2]
-                }
-              };
+            if (match) {
+              // 根据模型类型选择支持的图片格式
+              if (doc.type.startsWith('image/') && GEMINI_SUPPORTED_IMAGES.includes(match[1])) {
+                return {
+                  inlineData: {
+                    mimeType: match[1],
+                    data: match[2]
+                  }
+                };
+              } else if (SUPPORTED_INLINE_MIMES.includes(match[1])) {
+                return {
+                  inlineData: {
+                    mimeType: match[1],
+                    data: match[2]
+                  }
+                };
+              }
             }
           }
           return null;
@@ -145,16 +160,67 @@ export async function chatWithAI(
       dangerouslyAllowBrowser: true
     });
 
+    // 为OpenAI模型准备消息，支持图片
+    const openaiMessages: any[] = [
+      { role: "system" as const, content: systemPrompt }
+    ];
+
+    // 处理每条消息
+    messages.forEach(m => {
+      openaiMessages.push({
+        role: m.role as "user" | "assistant" | "system",
+        content: m.content
+      });
+    });
+
+    // 如果有文档，处理图片并添加到最后一条用户消息
+    if (documents.length > 0) {
+      // 找到最后一条用户消息
+      let lastUserMessageIndex = -1;
+      for (let i = openaiMessages.length - 1; i >= 0; i--) {
+        if (openaiMessages[i].role === "user") {
+          lastUserMessageIndex = i;
+          break;
+        }
+      }
+      
+      if (lastUserMessageIndex !== -1) {
+        // 处理图片文档，只保留OpenAI支持的图片格式
+        const imageDocs = documents.filter(doc => 
+          doc.content.startsWith('data:') && 
+          doc.type.startsWith('image/')
+        );
+        
+        if (imageDocs.length > 0) {
+          // 将文本内容转换为消息的content数组
+          const originalContent = openaiMessages[lastUserMessageIndex].content;
+          const contentArray: any[] = typeof originalContent === 'string' ? 
+            [{ type: "text", text: originalContent }] : 
+            [...originalContent];
+          
+          // 添加图片到消息content数组，只传递OpenAI支持的图片格式
+          for (const doc of imageDocs) {
+            const match = doc.content.match(/^data:([^;]+);base64,(.*)$/);
+            if (match && OPENAI_SUPPORTED_IMAGES.includes(match[1])) {
+              contentArray.push({
+                type: "image_url",
+                image_url: {
+                  url: doc.content // OpenAI支持直接使用data URL
+                }
+              });
+            }
+          }
+          
+          // 更新最后一条用户消息的content
+          openaiMessages[lastUserMessageIndex].content = contentArray;
+        }
+      }
+    }
+
     if (isStreaming && onChunk) {
       const stream = await openai.chat.completions.create({
         model: modelConfig.modelName,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.map(m => ({
-            role: m.role as "user" | "assistant" | "system",
-            content: m.content
-          }))
-        ],
+        messages: openaiMessages,
         stream: true,
         stream_options: { include_usage: true }
       });
@@ -177,13 +243,7 @@ export async function chatWithAI(
     } else {
       const response = await openai.chat.completions.create({
         model: modelConfig.modelName,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.map(m => ({
-            role: m.role as "user" | "assistant" | "system",
-            content: m.content
-          }))
-        ],
+        messages: openaiMessages,
       });
 
       return { 
