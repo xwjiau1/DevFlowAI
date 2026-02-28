@@ -20,7 +20,7 @@ interface MarkdownRendererProps {
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onDocLinkClick, onFixMermaid, className = '' }) => {
   return (
-    <div className={cn("prose prose-zinc prose-base leading-relaxed max-w-none dark:prose-invert", className)}>
+    <div className={cn("prose prose-zinc prose-base leading-relaxed max-w-none dark:prose-invert text-zinc-900 dark:text-zinc-100", className)}>
       <ErrorBoundary>
         <ReactMarkdown
         remarkPlugins={[remarkGfm]}
@@ -32,19 +32,27 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onDocLinkC
             const codeContent = String(children || '').replace(/\n$/, '');
             
             if (!inline && language === 'mermaid') {
+              // 完全禁用Mermaid图表渲染，只显示代码块
+              // 这是为了彻底解决无效Mermaid图表导致的SVG渲染问题
               return (
-                <ErrorBoundary
-                  fallback={(
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 dark:bg-red-900/20 dark:border-red-800">
-                      <p className="text-red-600 dark:text-red-400">Mermaid 图表渲染失败</p>
-                    </div>
-                  )}
-                >
-                  <Mermaid 
-                    chart={codeContent} 
-                    onFix={onFixMermaid}
-                  />
-                </ErrorBoundary>
+                <div className="relative group/code my-5">
+                  <pre className={cn(className, "p-5 rounded-xl bg-zinc-800 text-zinc-100 overflow-x-auto dark:bg-zinc-900 border border-zinc-700")}>
+                    <code className="text-sm font-mono leading-relaxed" {...props}>
+                      {children}
+                    </code>
+                  </pre>
+                  <button 
+                    onClick={() => {
+                      if (codeContent) {
+                        navigator.clipboard.writeText(codeContent);
+                      }
+                    }}
+                    className="absolute top-3 right-3 p-1.5 bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white rounded-lg opacity-0 group-hover/code:opacity-100 transition-all duration-200"
+                    title="Copy code"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               );
             }
             
@@ -80,7 +88,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, onDocLinkC
           p({ children }) {
             // 检查 children 是否存在，避免渲染空 div
             if (!children) return null;
-            return <div className="mb-4 last:mb-0 leading-relaxed text-zinc-800 dark:text-zinc-200">{children}</div>;
+            return <div className="mb-4 last:mb-0 leading-relaxed text-zinc-900 dark:text-zinc-200">{children}</div>;
           },
           h1: ({ children, ...props }) => (
             <h1 className="text-2xl font-bold mb-6 mt-0 text-zinc-900 dark:text-white" {...props}>{children}</h1>

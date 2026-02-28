@@ -13,6 +13,7 @@
   "dependencies": {
     "@google/genai": "^1.42.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "adm-zip": "^0.5.16",
     "better-sqlite3": "^12.4.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -22,6 +23,7 @@
     "mammoth": "^1.11.0",
     "mermaid": "^11.12.3",
     "motion": "^12.23.24",
+    "multer": "^1.4.5-lts.1",
     "openai": "^6.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

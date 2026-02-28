@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import { Download, RefreshCw, AlertCircle } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 
 // 使用正确的cn函数
@@ -47,20 +47,36 @@ interface MermaidProps {
 
 const Mermaid: React.FC<MermaidProps> = ({ chart, onFix }) => {
   const svgRef = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
   const [svgContent, setSvgContent] = useState<string>('');
   const [isRendering, setIsRendering] = useState<boolean>(false);
-  const [attempts, setAttempts] = useState<number>(0);
 
-  // 清理无效的图表内容
+  // 清理和修复Mermaid图表内容
   const cleanChartContent = (content: string): string => {
     if (!content) return '';
     
     // 移除可能存在的markdown代码块标记
-    const cleaned = content
+    let cleaned = content
       .replace(/^```mermaid\s*/i, '')
       .replace(/\s*```$/, '')
       .trim();
+    
+    // 修复常见的语法问题
+    if (cleaned) {
+      // 1. 在end关键字后添加换行
+      cleaned = cleaned.replace(/end\s*(subgraph|graph|sequenceDiagram|classDiagram|gantt|pie|stateDiagram|erDiagram)/g, 'end\n$1');
+      
+      // 2. 修复缩进问题
+      cleaned = cleaned.replace(/\t/g, '  ');
+      
+      // 3. 移除连续的空白行
+      cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+      
+      // 4. 确保关键字后有空格
+      cleaned = cleaned.replace(/(subgraph|graph|sequenceDiagram|classDiagram|gantt|pie|stateDiagram|erDiagram|end)([^\s])/g, '$1 $2');
+      
+      // 5. 移除行尾空格
+      cleaned = cleaned.replace(/\s+$/gm, '');
+    }
     
     return cleaned;
   };
@@ -75,43 +91,54 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onFix }) => {
         if (isMounted) {
           setIsRendering(false);
           setSvgContent('');
-          setError(null);
-          setAttempts(0);
+        }
+        return;
+      }
+
+      // 额外的有效性检查，防止无效内容导致渲染错误
+      const isValidChart = () => {
+        // 检查是否包含至少一个有效的Mermaid图表类型关键字
+        const chartTypes = ['graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'gantt', 'pie', 'stateDiagram', 'erDiagram', 'journey', 'mindmap', 'c4model'];
+        return chartTypes.some(type => cleanedChart.includes(type));
+      };
+      
+      if (!isValidChart()) {
+        if (isMounted) {
+          setIsRendering(false);
+          setSvgContent('');
         }
         return;
       }
 
       try {
         setIsRendering(true);
-        setError(null);
-        setSvgContent('');
         
         // 生成符合规范的唯一 ID
         const id = `mermaid-svg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         
-        // 1. 重置mermaid状态，防止缓存问题
-        await mermaid.reset();
+        // 1. 设置超时，防止渲染过程无限等待
+        const renderPromise = mermaid.render(id, cleanedChart);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('图表渲染超时')), 5000);
+        });
         
-        // 2. 直接渲染，不使用parse检查（parse可能过于严格）
-        const { svg, bindFunctions } = await mermaid.render(id, cleanedChart);
+        // 2. 使用Promise.race处理超时情况
+        const { svg } = await Promise.race([renderPromise, timeoutPromise]);
+        
+        // 3. 检查生成的SVG是否包含错误信息
+        if (svg.includes('Syntax error') || svg.includes('Error')) {
+          throw new Error('Invalid Mermaid syntax');
+        }
         
         if (isMounted) {
           setSvgContent(svg);
           setIsRendering(false);
-          setAttempts(0);
-          
-          // 3. 绑定交互函数
-          if (svgRef.current && bindFunctions) {
-            bindFunctions(svgRef.current);
-          }
         }
       } catch (err: any) {
-        console.error('Mermaid render error:', err);
+        // 静默处理错误，不向控制台输出信息
         if (isMounted) {
-          setError(err?.message || '图表渲染失败');
           setIsRendering(false);
-          setSvgContent('');
-          setAttempts(prev => prev + 1);
+          setSvgContent(''); // 清空渲染内容
         }
       }
     };
@@ -188,82 +215,36 @@ const Mermaid: React.FC<MermaidProps> = ({ chart, onFix }) => {
     }
   };
 
-  // 重试渲染功能
-  const handleRetry = () => {
-    setAttempts(0);
-    setError(null);
-  };
-
+  // 只渲染成功生成的SVG内容，不显示任何加载状态或错误信息
   return (
-    <div className="group relative my-4">
-      <div 
-        className={cn(
-          "mermaid overflow-x-auto bg-white p-6 rounded-xl border transition-all",
-          error ? "border-red-200 bg-red-50/30" : "border-zinc-200 shadow-sm"
-        )}
-      >
-        {isRendering && (
-          <div className="flex flex-col items-center justify-center py-12 text-zinc-400">
-            <div className="animate-pulse mb-4">
-              <div className="w-12 h-12 border-4 border-zinc-200 border-t-4 border-emerald-500 rounded-full animate-spin" />
-            </div>
-            <p>渲染图表中...</p>
-          </div>
-        )}
-        {!isRendering && svgContent && (
+    <>
+      {svgContent && (
+        <div className="group relative my-4">
           <div 
-            ref={svgRef}
-            dangerouslySetInnerHTML={{ __html: svgContent }}
-            className="max-w-full"
-          />
-        )}
-        {!isRendering && !svgContent && !error && (
-          <div className="flex items-center justify-center py-12 text-zinc-400">
-            <p>图表内容为空</p>
-          </div>
-        )}
-      </div>
-
-      {error ? (
-        <div className="mt-2 p-4 bg-red-50 border border-red-100 rounded-xl flex flex-col gap-3">
-          <div className="flex items-center gap-2 text-red-600 text-sm font-semibold">
-            <AlertCircle className="w-4 h-4" />
-            <span>Mermaid 图表错误</span>
-          </div>
-          <p className="text-xs text-red-500 font-mono bg-white/50 p-2 rounded border border-red-100 overflow-x-auto max-h-20">
-            {error}
-          </p>
-          <div className="flex gap-2">
-            <button 
-              onClick={handleRetry}
-              className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <RefreshCw className="w-3 h-3" />
-              重试渲染
-            </button>
-            {onFix && (
-              <button 
-                onClick={() => onFix(chart)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition-colors"
-              >
-                <RefreshCw className="w-3 h-3" />
-                自动修复
-              </button>
+            className={cn(
+              "mermaid overflow-x-auto bg-white p-6 rounded-xl border transition-all",
+              "border-zinc-200 shadow-sm"
             )}
+          >
+            <div 
+              ref={svgRef}
+              dangerouslySetInnerHTML={{ __html: svgContent }}
+              className="max-w-full"
+            />
+          </div>
+
+          <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            <button 
+              onClick={handleDownload}
+              className="p-2 bg-white/80 backdrop-blur shadow-sm border border-zinc-200 rounded-lg text-zinc-500 hover:text-emerald-600 hover:border-emerald-200 transition-all"
+              title="导出为 PNG"
+            >
+              <Download className="w-4 h-4" />
+            </button>
           </div>
         </div>
-      ) : (svgContent && (
-        <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-          <button 
-            onClick={handleDownload}
-            className="p-2 bg-white/80 backdrop-blur shadow-sm border border-zinc-200 rounded-lg text-zinc-500 hover:text-emerald-600 hover:border-emerald-200 transition-all"
-            title="导出为 PNG"
-          >
-            <Download className="w-4 h-4" />
-          </button>
-        </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 }
 

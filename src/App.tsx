@@ -39,7 +39,10 @@ import {
   Check,
   Download,
   Sun,
-  Moon
+  Moon,
+  FolderOpen,
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 import { useTheme } from './context/ThemeContext';
 import { motion, AnimatePresence } from 'motion/react';
@@ -67,14 +70,14 @@ function cn(...inputs: ClassValue[]) {
 }
 
 const STEPS = [
-  { id: 1, title: '需求确认', icon: MessageSquare, description: '初步沟通，留存会议纪要和录屏' },
-  { id: 2, title: 'AW 任务项', icon: ClipboardList, description: '填写任务项' },
-  { id: 3, title: '整体流程图', icon: GitBranch, description: '基于方案整理流程图' },
-  { id: 4, title: '开发方案', icon: Calendar, description: '制定开发方案与计划' },
-  { id: 5, title: '原型开发', icon: Box, description: '需求原型开发' },
-  { id: 6, title: '过程进度', icon: RefreshCw, description: '整理开发过程进度文档' },
-  { id: 7, title: '文档输出', icon: FileCode, description: '接口文档、上线方案等' },
+  { id: 1, title: '项目启动', icon: MessageSquare, description: '项目初始化与团队组建' },
+  { id: 2, title: '需求确认', icon: ClipboardList, description: '需求分析与确认，留存会议纪要' },
+  { id: 3, title: '方案评审', icon: GitBranch, description: '技术方案设计与评审' },
+  { id: 4, title: '系统建设', icon: Box, description: '系统开发与功能实现' },
+  { id: 5, title: 'UAT测试', icon: RefreshCw, description: '用户验收测试' },
+  { id: 6, title: '上线切换', icon: FileCode, description: '系统上线与切换' },
 ];
+
 
 const FileIconForType = ({ type }: { type: string }) => {
   if (type.includes('image')) return <ImageIcon className="w-5 h-5" />;
@@ -274,10 +277,13 @@ export default function App() {
   const [newProjectName, setNewProjectName] = useState('');
   const [newReviewContent, setNewReviewContent] = useState('');
   const [newFolderName, setNewFolderName] = useState('');
+  const [selectedParentFolderId, setSelectedParentFolderId] = useState<string | null>(null);
   const [newModelDisplayName, setNewModelDisplayName] = useState('');
   const [newModelName, setNewModelName] = useState('');
   const [newModelBaseUrl, setNewModelBaseUrl] = useState('');
   const [newModelApiKey, setNewModelApiKey] = useState('');
+  // 新增：当前选中的步骤，用于关联待办事项
+  const [selectedStep, setSelectedStep] = useState<number | null>(null);
 
   const [isStreaming, setIsStreaming] = useState(() => {
     const saved = localStorage.getItem('isStreaming');
@@ -294,6 +300,12 @@ export default function App() {
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const [uploadingStep, setUploadingStep] = useState<number | null>(null);
+  const [isSelectingFolder, setIsSelectingFolder] = useState(false);
+  const [selectedUploadFolderId, setSelectedUploadFolderId] = useState<string | null>(null);
+  const [fileToUpload, setFileToUpload] = useState<File | null>(null);
+  const [isZipUploading, setIsZipUploading] = useState(false);
+  const [zipUploadProgress, setZipUploadProgress] = useState(0);
+  const [zipImportSummary, setZipImportSummary] = useState<{ success: boolean, summary: any } | null>(null);
 
   useEffect(() => {
     checkBackend();
@@ -532,10 +544,94 @@ export default function App() {
     fetchProjectData(activeProject.id);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, stepNumber?: number, folderId?: string) => {
+  // 新增：重置步骤状态功能
+  const handleResetStepStatus = async (stepId: number) => {
+    if (!activeProject) return;
+    
+    const existingTask = tasks.find(t => t.step_number === stepId);
+    
+    if (existingTask) {
+      // 删除任务，恢复到初始状态
+      await fetch(`/api/projects/${activeProject.id}/tasks/${existingTask.id}`, {
+        method: 'DELETE'
+      });
+      
+      fetchProjectData(activeProject.id);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, stepNumber?: number, folderId?: string) => {
     const file = e.target.files?.[0];
     if (!file || !activeProject) return;
+    
+    // If folderId is provided directly (from some UI actions), upload immediately
+    if (folderId) {
+      performFileUpload(file, stepNumber, folderId);
+    } else {
+      // Otherwise, show folder selection modal
+      setFileToUpload(file);
+      setSelectedUploadFolderId(null);
+      setIsSelectingFolder(true);
+    }
+  };
 
+  const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeProject) return;
+    
+    if (!file.name.endsWith('.zip')) {
+      alert('Please select a zip file');
+      return;
+    }
+    
+    setIsZipUploading(true);
+    setZipUploadProgress(0);
+    setZipImportSummary(null);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const xhr = new XMLHttpRequest();
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          setZipUploadProgress(progress);
+        }
+      };
+      
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          const response = JSON.parse(xhr.responseText);
+          setZipImportSummary(response);
+          // Refresh documents and folders after import
+          fetchProjectData(activeProject.id);
+        } else {
+          console.error('Zip upload failed:', xhr.statusText);
+          alert('Zip upload failed. Please check the file and try again.');
+        }
+        setIsZipUploading(false);
+      };
+      
+      xhr.onerror = () => {
+        console.error('Zip upload error');
+        alert('Zip upload error. Please try again.');
+        setIsZipUploading(false);
+      };
+      
+      xhr.open('POST', `/api/projects/${activeProject.id}/import-zip`);
+      xhr.send(formData);
+    } catch (error) {
+      console.error('Error uploading zip file:', error);
+      alert('Error uploading zip file. Please try again.');
+      setIsZipUploading(false);
+    }
+  };
+  
+  const performFileUpload = async (file: File, stepNumber?: number, folderId?: string) => {
+    if (!activeProject) return;
+    
     const isWord = file.type.includes('word') || file.type.includes('officedocument.wordprocessingml.document') || file.name.endsWith('.docx');
     
     const reader = new FileReader();
@@ -590,15 +686,26 @@ export default function App() {
     if (!newFolderName.trim() || !activeProject) return;
 
     const folderId = Math.random().toString(36).substring(7);
-    await fetch(`/api/projects/${activeProject.id}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: folderId, name: newFolderName })
-    });
+    try {
+      const response = await fetch(`/api/projects/${activeProject.id}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: folderId, name: newFolderName, parent_id: selectedParentFolderId })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create folder');
+      }
 
-    setNewFolderName('');
-    setIsCreatingFolder(false);
-    fetchProjectData(activeProject.id);
+      setNewFolderName('');
+      setIsCreatingFolder(false);
+      setSelectedParentFolderId(null);
+      fetchProjectData(activeProject.id);
+    } catch (error) {
+      console.error('Failed to create folder:', error);
+      alert(`Failed to create folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   const deleteFolder = async (folderId: string) => {
@@ -641,13 +748,24 @@ export default function App() {
 
   const handleCreateReview = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeProject || !newReviewContent.trim()) return;
+    if (!activeProject || !newReviewContent.trim() || !selectedStep) return;
+
+    // 检查选中的步骤是否处于初始状态
+    const selectedStepTask = tasks.find(t => t.step_number === selectedStep);
+    if (!selectedStepTask) {
+      alert('Cannot add todos to a step in initial state. Please start the step first.');
+      return;
+    }
 
     const reviewId = Math.random().toString(36).substring(7);
     await fetch(`/api/projects/${activeProject.id}/reviews`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: reviewId, content: newReviewContent })
+      body: JSON.stringify({ 
+        id: reviewId, 
+        content: newReviewContent, 
+        step_number: selectedStep 
+      })
     });
 
     setNewReviewContent('');
@@ -910,12 +1028,19 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#F9F9F8] dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans overflow-hidden">
-      {/* Hidden File Input */}
+      {/* Hidden File Inputs */}
       <input 
         type="file" 
         ref={fileInputRef} 
         className="hidden" 
         onChange={(e) => handleFileUpload(e, uploadingStep || undefined)} 
+      />
+      <input 
+        type="file" 
+        accept=".zip" 
+        className="hidden" 
+        id="zip-upload-input"
+        onChange={handleZipUpload} 
       />
 
       {/* Modals */}
@@ -936,7 +1061,7 @@ export default function App() {
                     autoFocus
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg py-3 px-4 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-zinc-900 dark:text-zinc-100 transition-all"
+                    className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg py-3 px-4 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 transition-all"
                     placeholder="Enter project name..."
                   />
                 </div>
@@ -1074,7 +1199,7 @@ export default function App() {
                           <input 
                             value={newModelDisplayName}
                             onChange={(e) => setNewModelDisplayName(e.target.value)}
-                            className="w-full bg-white border border-zinc-200 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500"
                             placeholder="OpenAI GPT-4o"
                           />
                         </div>
@@ -1083,7 +1208,7 @@ export default function App() {
                           <input 
                             value={newModelName}
                             onChange={(e) => setNewModelName(e.target.value)}
-                            className="w-full bg-white border border-zinc-200 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500"
                             placeholder="gpt-4o"
                           />
                         </div>
@@ -1091,21 +1216,21 @@ export default function App() {
                       <div>
                         <label className="block text-sm font-bold text-zinc-600 mb-2">API BASE URL</label>
                         <input 
-                          value={newModelBaseUrl}
-                          onChange={(e) => setNewModelBaseUrl(e.target.value)}
-                          className="w-full bg-white border border-zinc-200 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                          placeholder="https://api.openai.com/v1"
-                        />
+                            value={newModelBaseUrl}
+                            onChange={(e) => setNewModelBaseUrl(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500"
+                            placeholder="https://api.openai.com/v1"
+                          />
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-zinc-600 mb-2">API KEY</label>
                         <input 
-                          type="password"
-                          value={newModelApiKey}
-                          onChange={(e) => setNewModelApiKey(e.target.value)}
-                          className="w-full bg-white border border-zinc-200 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                          placeholder="sk-..."
-                        />
+                            type="password"
+                            value={newModelApiKey}
+                            onChange={(e) => setNewModelApiKey(e.target.value)}
+                            className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-emerald-500 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500"
+                            placeholder="sk-..."
+                          />
                       </div>
                       <div className="flex gap-3">
                         <button 
@@ -1415,22 +1540,24 @@ export default function App() {
           <AnimatePresence mode="wait">
             {activeTab === 'chat' && (
               <motion.div 
-                key="chat"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="h-full flex flex-col"
-                ref={chatContainerRef}
-              >
-                <div 
-                  className="flex-1 overflow-y-auto p-6 space-y-6 message-list bg-[#F9F9F8] dark:bg-zinc-900"
-                  style={{
-                    scrollBehavior: 'auto', // 禁用平滑滚动，减少抖动
-                    overflowX: 'hidden', // 禁用水平滚动
-                    width: '100%', // 固定宽度
-                    maxWidth: '100%' // 确保不超过容器宽度
-                  }}
+                  key="chat"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="h-full flex flex-col"
+                  ref={chatContainerRef}
                 >
+                  <div 
+                    className="flex-1 overflow-y-auto p-6 space-y-6 message-list bg-[#F9F9F8] dark:bg-zinc-900"
+                    style={{
+                      scrollBehavior: 'auto', // 禁用平滑滚动，减少抖动
+                      overflowX: 'hidden', // 禁用水平滚动
+                      width: '100%', // 固定宽度
+                      maxWidth: '100%', // 确保不超过容器宽度
+                      maxHeight: 'calc(100vh - 200px)', // 限制最大高度
+                      overflowY: 'auto' // 启用垂直滚动
+                    }}
+                  >
                   {messages.length === 0 && (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4 max-w-md mx-auto">
                       <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-2xl flex items-center justify-center">
@@ -1471,9 +1598,9 @@ export default function App() {
                         {m.role === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
                       </div>
                       <div className={cn(
-                        "p-5 rounded-xl shadow-md border relative group/msg max-w-[calc(100%-48px)]",
+                        "p-5 rounded-xl shadow-md relative group/msg max-w-[calc(100%-48px)]",
                         m.role === 'user' 
-                          ? "bg-zinc-800 text-white border-zinc-700" 
+                          ? "bg-[#f3f4f6] text-[#1f2937] dark:bg-zinc-800 dark:text-white" 
                           : "bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-900 dark:text-white"
                       )}>
                         <MarkdownRenderer 
@@ -1492,8 +1619,8 @@ export default function App() {
                           className={cn(
                             "absolute top-3 right-3 p-1.5 rounded-lg transition-all opacity-0 group-hover/msg:opacity-100 hover:scale-105",
                             m.role === 'user' 
-                              ? "bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white" 
-                              : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
+                              ? "bg-[#e5e7eb] text-[#4b5563] hover:bg-[#d1d5db] hover:text-[#1f2937] dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600 dark:hover:text-white" 
+                              : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600 dark:hover:text-white"
                           )}
                           title="Copy message"
                         >
@@ -1543,7 +1670,7 @@ export default function App() {
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         placeholder="Ask anything about the project..."
-                        className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-full py-3 pl-6 pr-16 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 shadow-sm"
+                        className="w-full bg-[#ffffff] dark:bg-[#18181b] border border-zinc-200 dark:border-zinc-700 rounded-full py-3 pl-6 pr-16 focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto text-base text-[#18181b] dark:text-[#f5f5f5] placeholder-zinc-400 dark:placeholder-zinc-500 shadow-sm"
                         autoFocus
                         rows={1}
                         style={{
@@ -1556,7 +1683,10 @@ export default function App() {
                           wordWrap: 'break-word',
                           overflowWrap: 'break-word',
                           // 确保输入时不会触发布局重排
-                          overflowX: 'hidden'
+                          overflowX: 'hidden',
+                          // 明确指定背景颜色和文字颜色，确保对比度
+                          backgroundColor: theme === 'light' ? '#ffffff' : '#18181b',
+                          color: theme === 'light' ? '#18181b' : '#f5f5f5'
                         }}
                       />
                       <button 
@@ -1621,12 +1751,15 @@ export default function App() {
                               </div>
                             </div>
                           )}
-                          <div className={cn(
-                            "w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-transform group-hover:scale-110",
+                          <div 
+                          className={cn(
+                            "w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-transform group-hover:scale-110 cursor-pointer",
                             isDone ? "bg-white text-emerald-600 shadow-sm" : isDoing ? "bg-white text-blue-600 shadow-sm" : "bg-zinc-100 text-zinc-500"
-                          )}>
-                            <step.icon className="w-6 h-6" />
-                          </div>
+                          )}
+                          onClick={() => setSelectedStep(step.id)}
+                        >
+                          <step.icon className="w-6 h-6" />
+                        </div>
                           <h3 className="font-bold text-lg mb-1 text-zinc-900 dark:text-white">{step.id}. {step.title}</h3>
                           <p className="text-sm text-zinc-500 dark:text-zinc-300 mb-4 flex-1">{step.description}</p>
                           
@@ -1656,16 +1789,17 @@ export default function App() {
                             >
                               {isDone ? 'Completed' : isDoing ? 'Finish Step' : 'Start Step'}
                             </button>
-                            <button 
-                              onClick={() => {
-                                setUploadingStep(step.id);
-                                fileInputRef.current?.click();
-                              }}
-                              className="p-2 bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 rounded-xl hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-all"
-                              title="Upload Document"
-                            >
-                              <Plus className="w-5 h-5" />
-                            </button>
+                            
+                            {/* 新增：重置步骤状态按钮 */}
+                            {isDone || isDoing ? (
+                              <button 
+                                onClick={() => handleResetStepStatus(step.id)}
+                                className="p-2 rounded-xl text-sm font-semibold transition-all bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                                title="Reset Step Status"
+                              >
+                                <RefreshCw className="w-5 h-5" />
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -1686,18 +1820,48 @@ export default function App() {
                             alert('Please select or create a project first.');
                             return;
                           }
+                          if (!selectedStep) {
+                            alert('Please select a step card first.');
+                            return;
+                          }
                           setIsReviewModalOpen(true);
                         }}
-                        className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-medium transition-colors"
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-sm font-medium transition-colors",
+                          selectedStep 
+                            ? "bg-white/10 hover:bg-white/20 cursor-pointer" 
+                            : "bg-white/5 text-zinc-500 cursor-not-allowed"
+                        )}
                       >
                         New Review
                       </button>
                     </div>
                     <div className="space-y-4">
-                      {reviews.length === 0 ? (
-                        <p className="text-zinc-500 text-sm text-center py-4 italic">No reviews yet. Start your first daily review!</p>
+                      {selectedStep ? (
+                        <div className="text-sm text-zinc-400 mb-4">
+                          {STEPS.find(s => s.id === selectedStep)?.title} 的待办事项
+                        </div>
                       ) : (
-                        reviews.map(review => (
+                        <div className="text-sm text-zinc-400 mb-4">
+                          请选择一个步骤卡片查看相关待办事项
+                        </div>
+                      )}
+                      
+                      {(() => {
+                        // 根据selectedStep过滤待办事项
+                        const filteredReviews = selectedStep 
+                          ? reviews.filter(review => review.step_number === selectedStep)
+                          : [];
+                        
+                        if (filteredReviews.length === 0) {
+                          return (
+                            <p className="text-zinc-500 text-sm text-center py-4 italic">
+                              {selectedStep ? `No reviews yet for step ${selectedStep}.` : 'Please select a step.'}
+                            </p>
+                          );
+                        }
+                        
+                        return filteredReviews.map(review => (
                           <div key={review.id} className="p-4 bg-white/5 rounded-2xl border border-white/10 flex flex-col gap-3">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-4">
@@ -1746,8 +1910,8 @@ export default function App() {
                               />
                             </div>
                           </div>
-                        ))
-                      )}
+                        ));
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1764,60 +1928,98 @@ export default function App() {
               >
                 <div className="max-w-5xl mx-auto">
                   <div className="flex items-center justify-between mb-8">
-                    <div>
-                      <h2 className="text-2xl font-bold">Project Documents</h2>
-                      <p className="text-zinc-500">All generated documentation and assets.</p>
+                      <div>
+                        <h2 className="text-2xl font-bold">Project Documents</h2>
+                        <p className="text-zinc-500">All generated documentation and assets.</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => setIsCreatingFolder(true)}
+                          className="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zinc-50 transition-colors flex items-center gap-2"
+                        >
+                          <FolderPlus className="w-4 h-4" />
+                          New Folder
+                        </button>
+                        <button 
+                          onClick={() => fileInputRef.current?.click()}
+                          className="bg-zinc-900 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zinc-800 transition-colors flex items-center gap-2"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Upload
+                        </button>
+                        <button 
+                          onClick={() => document.getElementById('zip-upload-input')?.click()}
+                          className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-emerald-500 transition-colors flex items-center gap-2"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                          Import Zip
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => setIsCreatingFolder(true)}
-                        className="bg-white border border-zinc-200 text-zinc-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zinc-50 transition-colors flex items-center gap-2"
-                      >
-                        <FolderPlus className="w-4 h-4" />
-                        New Folder
-                      </button>
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="bg-zinc-900 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zinc-800 transition-colors flex items-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Upload
-                      </button>
-                    </div>
-                  </div>
 
                   <div className="space-y-8">
                     {/* Folders & Grouped Docs */}
-                    {folders.map(folder => {
-                      const folderDocs = documents.filter(d => d.folder_id === folder.id);
-                      return (
-                        <div key={folder.id} className="space-y-4">
-                          <div className="flex items-center justify-between group">
-                            <div className="flex items-center gap-2 text-zinc-400">
-                              <FolderIcon className="w-5 h-5" />
-                              <h3 className="font-bold text-sm uppercase tracking-wider">{folder.name}</h3>
-                              <span className="text-xs">({folderDocs.length})</span>
-                            </div>
-                            <button 
-                              onClick={() => deleteFolder(folder.id)}
-                              className="p-1 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                    {/* Render nested folders recursively */}
+                    {(() => {
+                      const renderNestedFolders = (parentId: string | null = null, level: number = 0) => {
+                        const levelFolders = folders.filter(f => f.parent_id === parentId);
+                        if (levelFolders.length === 0) return null;
+
+                        return (
+                          <div className={`space-y-4 ${level > 0 ? 'ml-6 border-l-2 border-zinc-100 pl-4' : ''}`}>
+                            {levelFolders.map(folder => {
+                              const folderDocs = documents.filter(d => d.folder_id === folder.id);
+                              const childFolders = folders.filter(f => f.parent_id === folder.id);
+
+                              return (
+                                <div key={folder.id} className="space-y-4">
+                                  <div className="flex items-center justify-between group">
+                                    <div className="flex items-center gap-2 text-zinc-400">
+                                      <FolderIcon className="w-5 h-5" />
+                                      <h3 className="font-bold text-sm uppercase tracking-wider">{folder.name}</h3>
+                                      <span className="text-xs">({folderDocs.length})</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {/* Button to create subfolder */}
+                                      <button 
+                                        onClick={() => {
+                                          setSelectedParentFolderId(folder.id);
+                                          setIsCreatingFolder(true);
+                                        }}
+                                        className="p-1 text-zinc-400 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-all"
+                                      >
+                                        <Plus className="w-4 h-4" />
+                                      </button>
+                                      {/* Button to delete folder */}
+                                      <button 
+                                        onClick={() => deleteFolder(folder.id)}
+                                        className="p-1 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {/* Folder documents */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {folderDocs.map(doc => (
+                                      <DocumentCard key={doc.id} doc={doc} onPreview={() => setSelectedDoc(doc)} onDelete={() => deleteDocument(doc.id)} />
+                                    ))}
+                                    {folderDocs.length === 0 && childFolders.length === 0 && (
+                                      <div className="col-span-full py-8 border border-dashed border-zinc-200 rounded-2xl flex flex-col items-center justify-center text-zinc-400 text-sm">
+                                        <p>Empty folder</p>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {/* Recursively render child folders */}
+                                  {renderNestedFolders(folder.id, level + 1)}
+                                </div>
+                              );
+                            })}
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {folderDocs.map(doc => (
-                              <DocumentCard key={doc.id} doc={doc} onPreview={() => setSelectedDoc(doc)} onDelete={() => deleteDocument(doc.id)} />
-                            ))}
-                            {folderDocs.length === 0 && (
-                              <div className="col-span-full py-8 border border-dashed border-zinc-200 rounded-2xl flex flex-col items-center justify-center text-zinc-400 text-sm">
-                                <p>Empty folder</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      };
+                      return renderNestedFolders();
+                    })()}
 
                     {/* Uncategorized Docs */}
                     {documents.filter(d => !d.folder_id).length > 0 && (
@@ -2002,14 +2204,53 @@ export default function App() {
                     autoFocus
                     value={newFolderName}
                     onChange={(e) => setNewFolderName(e.target.value)}
-                    className="w-full bg-zinc-100 border-none rounded-xl py-3 px-4 focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100 border-none rounded-xl py-3 px-4 focus:ring-2 focus:ring-emerald-500 outline-none placeholder-zinc-400 dark:placeholder-zinc-500"
                     placeholder="Enter folder name..."
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 mb-1">Parent Folder (Optional)</label>
+                  <select
+                    value={selectedParentFolderId || ''}
+                    onChange={(e) => setSelectedParentFolderId(e.target.value || null)}
+                    className="w-full bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100 border-none rounded-xl py-3 px-4 focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                  >
+                    <option value="">-- Root Directory --</option>
+                    {/* Render folder tree recursively */}
+                    {(() => {
+                      const renderFolderTree = (folders: Folder[], parentId: string | null = null, level: number = 0) => {
+                        const indent = ' '.repeat(level * 2);
+                        const result: React.ReactNode[] = [];
+                        
+                        folders
+                          .filter(f => f.parent_id === parentId)
+                          .forEach(folder => {
+                            result.push(
+                              <option key={folder.id} value={folder.id}>
+                                {indent}{folder.name}
+                              </option>
+                            );
+                            
+                            // Recursively render child folders
+                            const childFolders = folders.filter(child => child.parent_id === folder.id);
+                            if (childFolders.length > 0) {
+                              result.push(...renderFolderTree(folders, folder.id, level + 1));
+                            }
+                          });
+                        
+                        return result;
+                      };
+                      return renderFolderTree(folders);
+                    })()}
+                  </select>
                 </div>
                 <div className="flex gap-3 pt-4">
                   <button 
                     type="button"
-                    onClick={() => setIsCreatingFolder(false)}
+                    onClick={() => {
+                      setIsCreatingFolder(false);
+                      setSelectedParentFolderId(null);
+                    }}
                     className="flex-1 py-3 bg-zinc-100 text-zinc-600 rounded-xl font-semibold hover:bg-zinc-200 transition-all"
                   >
                     Cancel
@@ -2023,6 +2264,195 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Folder Selection Modal for File Upload */}
+        {isSelectingFolder && fileToUpload && (
+          <div key="modal-select-folder" className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <h2 className="text-2xl font-bold mb-6">Select Folder</h2>
+              <p className="text-zinc-600 mb-6">Choose where to upload: <strong>{fileToUpload.name}</strong></p>
+              
+              <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                {/* Root Directory Option */}
+                <button
+                  onClick={() => {
+                    performFileUpload(fileToUpload, null, null);
+                    setIsSelectingFolder(false);
+                    setFileToUpload(null);
+                  }}
+                  className="w-full text-left p-4 bg-zinc-100 rounded-xl hover:bg-zinc-200 transition-all flex items-center gap-3"
+                >
+                  <FolderIcon className="w-5 h-5 text-zinc-500" />
+                  <span className="font-semibold">-- Root Directory --</span>
+                </button>
+                
+                {/* Render folder tree recursively */}
+                {folders
+                  .filter(f => f.parent_id === null)
+                  .map(folder => {
+                    const renderFolder = (folder: Folder, level: number = 0) => {
+                      const indent = ' '.repeat(level * 4);
+                      const childFolders = folders.filter(f => f.parent_id === folder.id);
+                      
+                      return (
+                        <div key={folder.id} className="space-y-2">
+                          <button
+                            onClick={() => {
+                              performFileUpload(fileToUpload, null, folder.id);
+                              setIsSelectingFolder(false);
+                              setFileToUpload(null);
+                            }}
+                            className="w-full text-left p-4 bg-zinc-100 rounded-xl hover:bg-zinc-200 transition-all flex items-center gap-3"
+                          >
+                            <FolderIcon className="w-5 h-5 text-zinc-500" />
+                            <span className="font-semibold">{indent}{folder.name}</span>
+                          </button>
+                          
+                          {/* Render child folders */}
+                          <div className="pl-4">
+                            {childFolders.map(child => renderFolder(child, level + 1))}
+                          </div>
+                        </div>
+                      );
+                    };
+                    
+                    return renderFolder(folder);
+                  })}
+              </div>
+              
+              <div className="flex gap-3 pt-6">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setIsSelectingFolder(false);
+                    setFileToUpload(null);
+                  }}
+                  className="flex-1 py-3 bg-zinc-100 text-zinc-600 rounded-xl font-semibold hover:bg-zinc-200 transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Zip Upload Progress Modal */}
+        {isZipUploading && (
+          <div key="modal-zip-upload" className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <h2 className="text-2xl font-bold mb-6">Importing Zip File</h2>
+              <p className="text-zinc-500 mb-6">Please wait while we process your zip file...</p>
+              
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-zinc-500">Upload Progress</span>
+                    <span className="font-semibold">{zipUploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-zinc-100 rounded-full h-3">
+                    <motion.div 
+                      className="bg-emerald-600 h-3 rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${zipUploadProgress}%` }}
+                      transition={{ type: "spring", stiffness: 100 }}
+                    />
+                  </div>
+                </div>
+                
+                <div className="text-center text-sm text-zinc-400">
+                  Processing files and creating folder structure...
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        
+        {/* Zip Import Summary Modal */}
+        {zipImportSummary && (
+          <div key="modal-zip-summary" className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center ${zipImportSummary.success ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                  {zipImportSummary.success ? <CheckCircle className="w-6 h-6" /> : <XCircle className="w-6 h-6" />}
+                </div>
+                <h2 className="text-2xl font-bold">Import {zipImportSummary.success ? 'Complete' : 'Failed'}</h2>
+              </div>
+              
+              {zipImportSummary.success ? (
+                <div className="space-y-4">
+                  <p className="text-zinc-500 mb-4">Your zip file has been successfully imported!</p>
+                  
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Total Files</span>
+                      <span className="font-semibold">{zipImportSummary.summary.totalFiles}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Imported Files</span>
+                      <span className="font-semibold text-emerald-600">{zipImportSummary.summary.importedFiles}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Skipped Files</span>
+                      <span className="font-semibold text-amber-600">{zipImportSummary.summary.skippedFiles}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Folders Created</span>
+                      <span className="font-semibold text-blue-600">{zipImportSummary.summary.foldersCreated}</span>
+                    </div>
+                  </div>
+                  
+                  {zipImportSummary.summary.errors.length > 0 && (
+                    <div className="mt-4 p-4 bg-zinc-50 rounded-xl">
+                      <h3 className="text-sm font-semibold mb-2 text-zinc-700">Errors ({zipImportSummary.summary.errors.length})</h3>
+                      <div className="max-h-[150px] overflow-y-auto text-sm text-red-600">
+                        {zipImportSummary.summary.errors.map((error: string, index: number) => (
+                          <div key={index} className="mb-1">{error}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <p className="text-zinc-500 mb-4">Failed to import zip file. Please check the file and try again.</p>
+                  {zipImportSummary.summary.errors && zipImportSummary.summary.errors.length > 0 && (
+                    <div className="p-4 bg-zinc-50 rounded-xl">
+                      <h3 className="text-sm font-semibold mb-2 text-zinc-700">Error Details</h3>
+                      <div className="max-h-[150px] overflow-y-auto text-sm text-red-600">
+                        {zipImportSummary.summary.errors.map((error: string, index: number) => (
+                          <div key={index} className="mb-1">{error}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              <div className="flex justify-end gap-3 mt-8">
+                <button 
+                  onClick={() => setZipImportSummary(null)}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-zinc-900 text-white hover:bg-zinc-800 transition-colors"
+                >
+                  {zipImportSummary.success ? 'Done' : 'Close'}
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

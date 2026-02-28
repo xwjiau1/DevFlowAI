@@ -14,11 +14,8 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // 从localStorage获取主题，默认为浅色主题
   const [theme, setThemeState] = useState<Theme>(() => {
     const savedTheme = localStorage.getItem('theme') as Theme | null;
-    // 如果保存的是system，则转换为light
-    if (savedTheme === 'system') {
-      return 'light';
-    }
-    return savedTheme || 'light';
+    // 如果保存的主题无效或未设置，使用light作为默认值
+    return savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'light';
   });
 
   // 根据当前主题确定是否为暗色模式

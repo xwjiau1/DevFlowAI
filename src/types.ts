@@ -27,6 +27,7 @@ export interface Task {
 export interface Folder {
   id: string;
   project_id: string;
+  parent_id?: string;
   name: string;
   created_at: string;
 }
@@ -50,6 +51,7 @@ export interface Review {
   status?: 'todo' | 'doing' | 'done';
   remark?: string;
   created_at: string;
+  step_number: number;
 }
 
 export interface AIModel {
